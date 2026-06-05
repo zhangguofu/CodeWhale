@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::client::DeepSeekClient;
 use crate::config::MAX_SUBAGENTS;
 use crate::core::events::Event;
+use crate::dependencies::{ExternalTool, Git};
 use crate::llm_client::LlmClient;
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt, Tool};
 use crate::tools::handle::VarHandle;
@@ -585,6 +586,10 @@ pub struct SubAgentResult {
     pub agent_id: String,
     pub context_mode: String,
     pub fork_context: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
     pub agent_type: SubAgentType,
     pub assignment: SubAgentAssignment,
     #[serde(default)]
@@ -607,6 +612,29 @@ pub struct SubAgentResult {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn current_git_branch(workspace: &Path) -> Option<String> {
+    let branch = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return None;
+    }
+    if branch != "HEAD" {
+        return Some(branch.to_string());
+    }
+
+    let short_hash = run_git(workspace, &["rev-parse", "--short", "HEAD"])?;
+    let short_hash = short_hash.trim();
+    (!short_hash.is_empty()).then(|| format!("detached:{short_hash}"))
+}
+
+fn run_git(workspace: &Path, args: &[&str]) -> Option<String> {
+    let output = Git::output(args, workspace).ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -715,6 +743,8 @@ struct PersistedSubAgent {
     session_name: Option<String>,
     #[serde(default)]
     fork_context: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace: Option<PathBuf>,
     agent_type: SubAgentType,
     prompt: String,
     assignment: SubAgentAssignment,
@@ -1064,6 +1094,7 @@ pub struct SubAgent {
     /// against the manager's `current_session_boot_id` to classify the
     /// agent as in-session vs prior-session at list time.
     pub session_boot_id: String,
+    pub workspace: PathBuf,
     input_tx: Option<mpsc::UnboundedSender<SubAgentInput>>,
     task_handle: Option<JoinHandle<()>>,
 }
@@ -1081,6 +1112,7 @@ impl SubAgent {
         nickname: Option<String>,
         allowed_tools: Option<Vec<String>>,
         input_tx: mpsc::UnboundedSender<SubAgentInput>,
+        workspace: PathBuf,
         session_boot_id: String,
     ) -> Self {
         let session_name = id.clone();
@@ -1103,6 +1135,7 @@ impl SubAgent {
             last_activity_at: started_at,
             allowed_tools,
             session_boot_id,
+            workspace,
             input_tx: Some(input_tx),
             task_handle: None,
         }
@@ -1116,6 +1149,8 @@ impl SubAgent {
             agent_id: self.id.clone(),
             context_mode: if self.fork_context { "forked" } else { "fresh" }.to_string(),
             fork_context: self.fork_context,
+            workspace: Some(self.workspace.clone()),
+            git_branch: current_git_branch(&self.workspace),
             agent_type: self.agent_type.clone(),
             assignment: self.assignment.clone(),
             model: self.model.clone(),
@@ -1213,6 +1248,7 @@ impl SubAgentManager {
                 id: agent.id.clone(),
                 session_name: Some(agent.session_name.clone()),
                 fork_context: agent.fork_context,
+                workspace: Some(agent.workspace.clone()),
                 agent_type: agent.agent_type.clone(),
                 prompt: agent.prompt.clone(),
                 assignment: agent.assignment.clone(),
@@ -1289,6 +1325,9 @@ impl SubAgentManager {
                     .filter(|name| !name.trim().is_empty())
                     .unwrap_or_else(|| persisted.id.clone()),
                 fork_context: persisted.fork_context,
+                workspace: persisted
+                    .workspace
+                    .unwrap_or_else(|| self.workspace.clone()),
                 agent_type: persisted.agent_type,
                 prompt: persisted.prompt,
                 assignment: persisted.assignment,
@@ -1443,6 +1482,7 @@ impl SubAgentManager {
             nickname,
             tools.clone(),
             input_tx,
+            runtime.context.workspace.clone(),
             self.current_session_boot_id.clone(),
         );
         if let Some(name) = options
@@ -4152,6 +4192,8 @@ async fn run_subagent(
                 }
                 .to_string(),
                 fork_context: fork_context_enabled,
+                workspace: Some(runtime.context.workspace.clone()),
+                git_branch: current_git_branch(&runtime.context.workspace),
                 agent_type: agent_type.clone(),
                 assignment: assignment.clone(),
                 model: runtime.model.clone(),
@@ -4254,6 +4296,8 @@ async fn run_subagent(
                     agent_id: agent_id.clone(),
                     context_mode: if fork_context_enabled { "forked" } else { "fresh" }.to_string(),
                     fork_context: fork_context_enabled,
+                    workspace: Some(runtime.context.workspace.clone()),
+                    git_branch: current_git_branch(&runtime.context.workspace),
                     agent_type: agent_type.clone(),
                     assignment: assignment.clone(),
                     model: runtime.model.clone(),
@@ -4350,6 +4394,8 @@ async fn run_subagent(
                                     agent_id: agent_id.clone(),
                                     context_mode: if fork_context_enabled { "forked" } else { "fresh" }.to_string(),
                                     fork_context: fork_context_enabled,
+                                    workspace: Some(runtime.context.workspace.clone()),
+                                    git_branch: current_git_branch(&runtime.context.workspace),
                                     agent_type: agent_type.clone(),
                                     assignment: assignment.clone(),
                                     model: runtime.model.clone(),
@@ -4596,6 +4642,8 @@ async fn run_subagent(
         }
         .to_string(),
         fork_context: fork_context_enabled,
+        workspace: Some(runtime.context.workspace.clone()),
+        git_branch: current_git_branch(&runtime.context.workspace),
         agent_type,
         assignment,
         model: runtime.model.clone(),

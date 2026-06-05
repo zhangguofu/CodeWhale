@@ -3218,6 +3218,8 @@ fn make_subagent(
         agent_id: id.to_string(),
         context_mode: "fresh".to_string(),
         fork_context: false,
+        workspace: None,
+        git_branch: None,
         agent_type: crate::tools::subagent::SubAgentType::General,
         assignment: crate::tools::subagent::SubAgentAssignment {
             objective: format!("objective-{id}"),
@@ -4778,6 +4780,74 @@ fn completed_task_shell_wait_refreshes_workspace_context_before_ttl() {
         .expect("task shell completion should refresh context");
     assert!(
         refreshed.contains("feature/task-new"),
+        "expected refreshed branch in {refreshed:?}"
+    );
+}
+
+#[test]
+fn completed_subagent_shell_tool_refreshes_workspace_context_before_ttl() {
+    let repo = init_git_repo();
+    let checkout = Command::new("git")
+        .args(["checkout", "-b", "feature/subagent-old"])
+        .current_dir(repo.path())
+        .output()
+        .expect("git checkout should run");
+    assert!(
+        checkout.status.success(),
+        "git checkout failed: {}",
+        String::from_utf8_lossy(&checkout.stderr)
+    );
+
+    let mut app = create_test_app();
+    app.workspace = repo.path().to_path_buf();
+
+    let start = Instant::now();
+    crate::tui::workspace_context::refresh_if_needed(&mut app, start, true);
+    let initial = app
+        .workspace_context
+        .clone()
+        .expect("initial refresh should populate context");
+    assert!(
+        initial.contains("feature/subagent-old"),
+        "expected initial branch in {initial:?}"
+    );
+
+    let checkout = Command::new("git")
+        .args(["checkout", "-b", "feature/subagent-new"])
+        .current_dir(repo.path())
+        .output()
+        .expect("git checkout should run");
+    assert!(
+        checkout.status.success(),
+        "git checkout failed: {}",
+        String::from_utf8_lossy(&checkout.stderr)
+    );
+
+    let before_ttl = start + Duration::from_secs(crate::tui::workspace_context::REFRESH_SECS - 1);
+    crate::tui::workspace_context::refresh_if_needed(&mut app, before_ttl, true);
+    assert_eq!(
+        app.workspace_context.as_deref(),
+        Some(initial.as_str()),
+        "normal refresh should still respect the TTL"
+    );
+
+    handle_subagent_mailbox(
+        &mut app,
+        42,
+        &crate::tools::subagent::MailboxMessage::ToolCallCompleted {
+            agent_id: "agent_branch".to_string(),
+            tool_name: "exec_shell".to_string(),
+            step: 1,
+            ok: true,
+        },
+    );
+
+    let refreshed = app
+        .workspace_context
+        .as_deref()
+        .expect("subagent shell completion should refresh context");
+    assert!(
+        refreshed.contains("feature/subagent-new"),
         "expected refreshed branch in {refreshed:?}"
     );
 }

@@ -1,5 +1,6 @@
 use super::*;
 use axum::{Json, Router, routing::post};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 
@@ -13,6 +14,8 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
         agent_id: "agent_test".to_string(),
         context_mode: "fresh".to_string(),
         fork_context: false,
+        workspace: None,
+        git_branch: None,
         agent_type: SubAgentType::General,
         assignment: make_assignment(),
         model: "deepseek-v4-flash".to_string(),
@@ -24,6 +27,58 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
         duration_ms: 0,
         from_prior_session: false,
     }
+}
+
+fn init_subagent_git_repo() -> tempfile::TempDir {
+    let dir = tempdir().expect("tempdir");
+
+    let init = Command::new("git")
+        .arg("init")
+        .current_dir(dir.path())
+        .output()
+        .expect("git init should run");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let commit = Command::new("git")
+        .args([
+            "-c",
+            "user.name=codewhale Tests",
+            "-c",
+            "user.email=tests@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .expect("git commit should run");
+    assert!(
+        commit.status.success(),
+        "git commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    dir
+}
+
+fn git(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("git command should run");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn text_message(role: &str, text: &str) -> Message {
@@ -1110,6 +1165,7 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     let agent_id = agent.id.clone();
@@ -1142,6 +1198,7 @@ async fn agent_eval_on_completed_session_returns_full_projection_not_running_err
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     let full_output = "Per-issue analysis:\n".to_string() + &"detail line\n".repeat(400);
@@ -1197,6 +1254,7 @@ async fn agent_eval_resolves_session_via_agent_name_alias() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.session_name = "researcher".to_string();
@@ -1237,13 +1295,14 @@ async fn api_timeout_preserves_checkpoint_and_agent_eval_continues_from_it() {
         Some("Blue".to_string()),
         Some(vec![]),
         task_input_tx,
+        tmp.path().to_path_buf(),
         "boot_test".to_string(),
     );
     manager.write().await.agents.insert(agent_id.clone(), agent);
 
     let (client, calls, bodies) =
         delayed_chat_client(Duration::from_millis(80), "resumed answer").await;
-    let mut runtime = stub_runtime().with_step_api_timeout(Duration::from_millis(10));
+    let mut runtime = stub_runtime().with_step_api_timeout(Duration::from_millis(50));
     runtime.client = client;
     runtime.manager = Arc::clone(&manager);
     runtime.context = ToolContext::new(tmp.path());
@@ -1293,6 +1352,17 @@ async fn api_timeout_preserves_checkpoint_and_agent_eval_continues_from_it() {
             .any(|message| message_text(message).contains("Inspect checkpoint behavior")),
         "checkpoint should preserve local child prompt: {checkpoint:?}"
     );
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if calls.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("first timed-out API attempt should reach the test server");
 
     let ctx = runtime.context.clone();
     let tool = AgentEvalTool::new(Arc::clone(&manager));
@@ -1371,6 +1441,7 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     existing.session_name = "researcher".to_string();
@@ -1422,6 +1493,7 @@ async fn test_running_count_counts_only_agents_with_live_task_handles() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
@@ -1454,6 +1526,7 @@ fn test_running_count_ignores_running_status_without_task_handle() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
@@ -1475,6 +1548,7 @@ async fn test_running_count_counts_running_agents_until_status_reconciles() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;
@@ -1502,6 +1576,7 @@ async fn cleanup_auto_cancels_stale_running_agent_and_releases_slot() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.task_handle = Some(tokio::spawn(async {
@@ -1546,6 +1621,7 @@ async fn cleanup_keeps_recent_running_agent() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.last_activity_at = Instant::now();
@@ -1583,6 +1659,7 @@ async fn touch_refreshes_stale_running_agent_heartbeat() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.task_handle = Some(tokio::spawn(async {
@@ -1617,6 +1694,7 @@ fn test_assign_updates_running_agent_and_sends_message() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     let agent_id = agent.id.clone();
@@ -1655,6 +1733,7 @@ fn test_assign_rejects_message_for_non_running_agent() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Completed;
@@ -1680,6 +1759,7 @@ fn test_assign_updates_non_running_metadata_without_message() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Completed;
@@ -1716,6 +1796,7 @@ fn test_persist_and_reload_marks_running_agent_as_interrupted() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     let running_id = running.id.clone();
@@ -1752,6 +1833,7 @@ fn persist_and_reload_preserves_checkpoint_for_interrupted_running_agent() {
         Some("Blue".to_string()),
         Some(vec!["read_file".to_string()]),
         input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     running.checkpoint = Some(make_checkpoint(
@@ -2573,6 +2655,7 @@ fn insert_prior_session_agent(
         None,
         None,
         input_tx,
+        manager.workspace.clone(),
         boot_id.to_string(),
     );
     agent.status = status;
@@ -2632,6 +2715,38 @@ fn list_filtered_drops_prior_session_terminals_by_default() {
         .find(|s| s.agent_id == "current_running")
         .unwrap();
     assert!(!current.from_prior_session);
+}
+
+#[test]
+fn list_snapshots_refresh_git_branch_from_agent_workspace() {
+    let repo = init_subagent_git_repo();
+    git(repo.path(), &["checkout", "-b", "feature/agent-old"]);
+
+    let mut manager = SubAgentManager::new(repo.path().to_path_buf(), 5);
+    let current_boot = manager.session_boot_id().to_string();
+    insert_prior_session_agent(
+        &mut manager,
+        "current_running",
+        SubAgentStatus::Running,
+        &current_boot,
+    );
+
+    let listed = manager.list_filtered(false);
+    let agent = listed
+        .iter()
+        .find(|agent| agent.agent_id == "current_running")
+        .expect("current agent should be listed");
+    assert_eq!(agent.git_branch.as_deref(), Some("feature/agent-old"));
+    assert_eq!(agent.workspace.as_deref(), Some(repo.path()));
+
+    git(repo.path(), &["checkout", "-b", "feature/agent-new"]);
+
+    let refreshed = manager.list_filtered(false);
+    let agent = refreshed
+        .iter()
+        .find(|agent| agent.agent_id == "current_running")
+        .expect("current agent should still be listed");
+    assert_eq!(agent.git_branch.as_deref(), Some("feature/agent-new"));
 }
 
 #[test]
@@ -2850,6 +2965,7 @@ async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
         None,
         None,
         task_input_tx,
+        PathBuf::from("."),
         "boot_test".to_string(),
     );
     agent.status = SubAgentStatus::Running;

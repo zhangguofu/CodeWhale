@@ -1777,6 +1777,8 @@ fn live_subagent_result(
         agent_id: agent_id.to_string(),
         context_mode: "fresh".to_string(),
         fork_context: false,
+        workspace: None,
+        git_branch: None,
         agent_type,
         assignment: SubAgentAssignment {
             objective: summarize_tool_output(objective),
@@ -2075,6 +2077,25 @@ fn append_subagent_group(
             ]));
         }
 
+        if let Some(branch) = agent.git_branch.as_deref() {
+            let workspace = agent
+                .workspace
+                .as_deref()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty());
+            let mut branch_detail = format!("branch {branch}");
+            if let Some(workspace) = workspace {
+                branch_detail.push_str(&format!(" @ {workspace}"));
+            }
+            let max_len = content_width.saturating_sub(14);
+            let branch_detail = truncate_view_text(&branch_detail, max_len);
+            lines.push(Line::from(vec![
+                Span::styled("    git: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(branch_detail, Style::default().fg(palette::DEEPSEEK_SKY)),
+            ]));
+        }
+
         let max_len = content_width.saturating_sub(18);
         let objective = truncate_view_text(&agent.assignment.objective, max_len);
         lines.push(Line::from(vec![
@@ -2276,6 +2297,8 @@ mod tests {
             agent_id: id.to_string(),
             context_mode: "fresh".to_string(),
             fork_context: false,
+            workspace: None,
+            git_branch: None,
             agent_type: SubAgentType::Explore,
             assignment: SubAgentAssignment {
                 objective: "read the docs".to_string(),

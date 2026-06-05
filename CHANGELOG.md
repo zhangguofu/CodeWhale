@@ -186,6 +186,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sub-agent shell completions now refresh the workspace branch/status chip
+  immediately, and `/subagents` plus the Agents sidebar show each sub-agent's
+  current workspace branch when it is running in a child worktree.
 - Authentication failures now include redacted request context such as provider,
   base URL authority, model, key source, key type, and key fingerprint, making
   stale provider, endpoint, or API-key state diagnosable without exposing the

@@ -1797,6 +1797,7 @@ pub struct SidebarAgentRow {
     pub name: String,
     pub role: String,
     pub status: String,
+    pub git_branch: Option<String>,
     pub progress: Option<String>,
     pub steps_taken: u32,
     pub duration_ms: Option<u64>,
@@ -1838,6 +1839,7 @@ fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
                 name: agent.nickname.clone().unwrap_or_else(|| agent.name.clone()),
                 role: agent.agent_type.as_str().to_string(),
                 status: subagent_status_text(&agent.status).to_string(),
+                git_branch: agent.git_branch.clone(),
                 progress,
                 steps_taken: agent.steps_taken,
                 duration_ms: Some(agent.duration_ms),
@@ -1859,6 +1861,7 @@ fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
                 name: id.clone(),
                 role: "agent".to_string(),
                 status: "running".to_string(),
+                git_branch: None,
                 progress: Some(progress.clone()),
                 steps_taken: 0,
                 duration_ms: app.agent_activity_started_at.map(|started| {
@@ -1967,6 +1970,9 @@ pub fn subagent_panel_lines(
         if row.steps_taken > 0 {
             detail_parts.push(format!("{} step(s)", row.steps_taken));
         }
+        if let Some(branch) = row.git_branch.as_deref() {
+            detail_parts.push(format!("branch {branch}"));
+        }
         if let Some(duration) = row.duration_ms {
             detail_parts.push(format_duration_ms(duration));
         }
@@ -2059,6 +2065,9 @@ fn subagent_panel_hover_texts(
         detail_parts.push(row.id.clone());
         if row.steps_taken > 0 {
             detail_parts.push(format!("{} step(s)", row.steps_taken));
+        }
+        if let Some(branch) = row.git_branch.as_deref() {
+            detail_parts.push(format!("branch {branch}"));
         }
         if let Some(duration) = row.duration_ms {
             detail_parts.push(format_duration_ms(duration));
@@ -3216,6 +3225,7 @@ mod tests {
                 name: "check-docs-mcp".to_string(),
                 role: "explore".to_string(),
                 status: "running".to_string(),
+                git_branch: Some("feature/docs".to_string()),
                 progress: Some("step 2/3: running tool 'read_file'".to_string()),
                 steps_taken: 2,
                 duration_ms: Some(22_000),
@@ -3225,6 +3235,7 @@ mod tests {
                 name: "check-install-docs".to_string(),
                 role: "general".to_string(),
                 status: "done".to_string(),
+                git_branch: None,
                 progress: Some("SUMMARY: docs checked".to_string()),
                 steps_taken: 5,
                 duration_ms: Some(21_000),
@@ -3466,6 +3477,7 @@ mod tests {
             name: "sidebar-detail-worker-with-long-name".to_string(),
             role: "worker".to_string(),
             status: "running".to_string(),
+            git_branch: Some("codex/sidebar-hover".to_string()),
             progress: Some(long_progress.to_string()),
             steps_taken: 9,
             duration_ms: Some(12_345),

@@ -864,7 +864,7 @@ fn is_exec_tool(name: &str) -> bool {
     )
 }
 
-fn refreshes_workspace_context_on_completion(name: &str) -> bool {
+pub(super) fn refreshes_workspace_context_on_completion(name: &str) -> bool {
     matches!(
         name,
         "exec_shell"

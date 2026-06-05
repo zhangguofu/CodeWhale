@@ -99,7 +99,8 @@ use crate::tui::shell_job_routing::{
 use crate::tui::streaming_thinking;
 use crate::tui::subagent_routing::{
     format_task_list, handle_subagent_mailbox, open_task_pager, reconcile_subagent_activity_state,
-    running_agent_count, sort_subagents_in_place, task_mode_label, task_summary_to_panel_entry,
+    running_agent_count, sort_subagents_in_place, subagent_message_refreshes_workspace_context,
+    task_mode_label, task_summary_to_panel_entry,
 };
 #[cfg(test)]
 use crate::tui::tool_routing::exploring_label;
@@ -2248,7 +2249,12 @@ async fn run_event_loop(
                         // full list available via /agents command.
                     }
                     EngineEvent::SubAgentMailbox { seq, message } => {
+                        let should_refresh_subagents =
+                            subagent_message_refreshes_workspace_context(&message);
                         handle_subagent_mailbox(app, seq, &message);
+                        if should_refresh_subagents {
+                            let _ = engine_handle.send(Op::ListSubAgents).await;
+                        }
                         transcript_batch_updated = true;
                     }
                     EngineEvent::ApprovalRequired {
